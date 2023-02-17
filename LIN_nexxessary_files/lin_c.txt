@@ -1,0 +1,324 @@
+/* ****************************************************************************************
+ * Project      : Tenneco LF - Applicativo
+ * ****************************************************************************************
+ * File Name    : lin.c
+ * Description  : Gestione di alto livello della comunicazione LIN.
+ * Note         :
+ * **************************************************************************************** */
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  1.  PRIVATE INCLUDE FILES                                                               */
+/* ---------------------------------------------------------------------------------------- */
+#include "lin.h"
+#include "uart1.h"
+#include "pin_manager.h"
+#include "firmware_identification.h"
+#include <string.h>
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  2.  PRIVATE MACROS ('define')                                                           */
+/* ---------------------------------------------------------------------------------------- */
+#define LIN_PAYLOAD_clear(payload)      { memset(&payload, 0U, sizeof(payload)); }
+#define LIN_BUFFER_clear(buffer)        do { \
+                                            memset(&buffer, 0U, sizeof(t_LIN_BUFFER_stc)); \
+                                            buffer.flag_tx_rx_data_new = 0; \
+                                        } while(0)
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  3.  PRIVATE TYPE DEFINITIONS ('typedef')                                                */
+/* ---------------------------------------------------------------------------------------- */
+//
+
+/* ---------------------------------------------------------------------------------------- */
+/*  4.  PRIVATE VARIABLES AND CONSTANTS ('static')                                          */
+/* ---------------------------------------------------------------------------------------- */
+// LIN rx e tx buffer, usati per LIN_OBJECT_DESCRIPTOR[]
+// LIN tx buffer
+static t_LIN_BUFFER_stc ign_data01_tx_lin_buffer;
+t_LIN_BUFFER_stc pdu_protocol_response_tx_lin_buffer;
+// LIN rx buffer
+static t_LIN_BUFFER_stc pc_data01_rx_lin_buffer;
+t_LIN_BUFFER_stc pdu_protocol_request_rx_lin_buffer;
+// LIN dummy buffer (for LIN message objects not configured)
+static t_LIN_BUFFER_stc dummy_lin_buffer;
+
+// Message objects: tabella di configurazione (ad ogni PID corrisponde un message object in trasmissione o ricezione)
+const t_LIN_OBJ_DESCRIPTOR_stc LIN_OBJECT_DESCRIPTOR[LIN_MESSAGE_OBJ_TOTAL_NUMBER] =
+{
+//        identifier                        val     dir   data_length   nad     service                                             p_buffer
+/* 0*/ {  PDU_PROTOCOL_GET_SFREQ_1_ID   ,  { 1,     1,      8       },  1,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/* 1*/ {  PDU_PROTOCOL_GET_CURR_1_ID    ,  { 1,     1,      8       },  1,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/* 2*/ {  PDU_PROTOCOL_GET_SN_1_ID      ,  { 1,     1,      8       },  1,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/* 3*/ {  PDU_PROTOCOL_GET_FW_1_ID      ,  { 1,     1,      8       },  1,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/* 4*/ {  PDU_PROTOCOL_GET_NAD_1_ID     ,  { 1,     1,      8       },  1,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/* 5*/ {  PDU_PROTOCOL_GET_SFREQ_2_ID   ,  { 1,     1,      8       },  2,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/* 6*/ {  PDU_PROTOCOL_GET_CURR_2_ID    ,  { 1,     1,      8       },  2,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/* 7*/ {  PDU_PROTOCOL_GET_SN_2_ID      ,  { 1,     1,      8       },  2,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/* 8*/ {  PDU_PROTOCOL_GET_FW_2_ID      ,  { 1,     1,      8       },  2,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/* 9*/ {  PDU_PROTOCOL_GET_NAD_2_ID     ,  { 1,     1,      8       },  2,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*10*/ {  PDU_PROTOCOL_GET_SFREQ_3_ID   ,  { 1,     1,      8       },  3,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*11*/ {  PDU_PROTOCOL_GET_CURR_3_ID    ,  { 1,     1,      8       },  3,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*12*/ {  PDU_PROTOCOL_GET_SN_3_ID      ,  { 1,     1,      8       },  3,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*13*/ {  PDU_PROTOCOL_GET_FW_3_ID      ,  { 1,     1,      8       },  3,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*14*/ {  PDU_PROTOCOL_GET_NAD_3_ID     ,  { 1,     1,      8       },  3,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*15*/ {  PDU_PROTOCOL_GET_SFREQ_4_ID   ,  { 1,     1,      8       },  4,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*16*/ {  PDU_PROTOCOL_GET_CURR_4_ID    ,  { 1,     1,      8       },  4,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*17*/ {  PDU_PROTOCOL_GET_SN_4_ID      ,  { 1,     1,      8       },  4,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*18*/ {  PDU_PROTOCOL_GET_FW_4_ID      ,  { 1,     1,      8       },  4,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*19*/ {  PDU_PROTOCOL_GET_NAD_4_ID     ,  { 1,     1,      8       },  4,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*20*/ {  PDU_PROTOCOL_GET_SFREQ_5_ID   ,  { 1,     1,      8       },  5,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*21*/ {  PDU_PROTOCOL_GET_CURR_5_ID    ,  { 1,     1,      8       },  5,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*22*/ {  PDU_PROTOCOL_GET_SN_5_ID      ,  { 1,     1,      8       },  5,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*23*/ {  PDU_PROTOCOL_GET_FW_5_ID      ,  { 1,     1,      8       },  5,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*24*/ {  PDU_PROTOCOL_GET_NAD_5_ID     ,  { 1,     1,      8       },  5,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*25*/ {  PDU_PROTOCOL_GET_SFREQ_6_ID   ,  { 1,     1,      8       },  6,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*26*/ {  PDU_PROTOCOL_GET_CURR_6_ID    ,  { 1,     1,      8       },  6,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*27*/ {  PDU_PROTOCOL_GET_SN_6_ID      ,  { 1,     1,      8       },  6,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*28*/ {  PDU_PROTOCOL_GET_FW_6_ID      ,  { 1,     1,      8       },  6,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*29*/ {  PDU_PROTOCOL_GET_NAD_6_ID     ,  { 1,     1,      8       },  6,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*30*/ {  PDU_PROTOCOL_GET_SFREQ_7_ID   ,  { 1,     1,      8       },  7,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*31*/ {  PDU_PROTOCOL_GET_CURR_7_ID    ,  { 1,     1,      8       },  7,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*32*/ {  PDU_PROTOCOL_GET_SN_7_ID      ,  { 1,     1,      8       },  7,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*33*/ {  PDU_PROTOCOL_GET_FW_7_ID      ,  { 1,     1,      8       },  7,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*34*/ {  PDU_PROTOCOL_GET_NAD_7_ID     ,  { 1,     1,      8       },  7,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*35*/ {  PDU_PROTOCOL_GET_SFREQ_8_ID   ,  { 1,     1,      8       },  8,      SERVICE_READ_IGNITER_LAST_RESONANT_FREQ,            &pdu_protocol_response_tx_lin_buffer},
+/*36*/ {  PDU_PROTOCOL_GET_CURR_8_ID    ,  { 1,     1,      8       },  8,      SERVICE_READ_IGNITER_CURRENT,                       &pdu_protocol_response_tx_lin_buffer},
+/*37*/ {  PDU_PROTOCOL_GET_SN_8_ID      ,  { 1,     1,      8       },  8,      SERVICE_READ_SERIAL_NUMBER,                         &pdu_protocol_response_tx_lin_buffer},
+/*38*/ {  PDU_PROTOCOL_GET_FW_8_ID      ,  { 1,     1,      8       },  8,      SERVICE_READ_SW_VERSION_NUMBER,                     &pdu_protocol_response_tx_lin_buffer},
+/*39*/ {  PDU_PROTOCOL_GET_NAD_8_ID     ,  { 1,     1,      8       },  8,      SERVICE_READ_NODE_ADDRESS,                          &pdu_protocol_response_tx_lin_buffer},
+/*40*/ {  PDU_PROTOCOL_GET_DGNST_1_ID   ,  { 1,     1,      8       },  1,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*41*/ {  PDU_PROTOCOL_GET_DGNST_2_ID   ,  { 1,     1,      8       },  2,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*42*/ {  PDU_PROTOCOL_GET_DGNST_3_ID   ,  { 1,     1,      8       },  3,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*43*/ {  PDU_PROTOCOL_GET_DGNST_4_ID   ,  { 1,     1,      8       },  4,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*44*/ {  PDU_PROTOCOL_GET_DGNST_5_ID   ,  { 1,     1,      8       },  5,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*45*/ {  PDU_PROTOCOL_GET_DGNST_6_ID   ,  { 1,     1,      8       },  6,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*46*/ {  PDU_PROTOCOL_GET_DGNST_7_ID   ,  { 1,     1,      8       },  7,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*47*/ {  PDU_PROTOCOL_GET_DGNST_8_ID   ,  { 1,     1,      8       },  8,      SERVICE_READ_DIAGNOSTICS,                           &pdu_protocol_response_tx_lin_buffer},
+/*48*/ {  PDU_PROTOCOL_ACK_1_ID         ,  { 1,     1,      8       },  1,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*49*/ {  PDU_PROTOCOL_ACK_2_ID         ,  { 1,     1,      8       },  2,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*50*/ {  PDU_PROTOCOL_ACK_3_ID         ,  { 1,     1,      8       },  3,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*51*/ {  PDU_PROTOCOL_ACK_4_ID         ,  { 1,     1,      8       },  4,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*52*/ {  PDU_PROTOCOL_ACK_5_ID         ,  { 1,     1,      8       },  5,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*53*/ {  PDU_PROTOCOL_ACK_6_ID         ,  { 1,     1,      8       },  6,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*54*/ {  PDU_PROTOCOL_ACK_7_ID         ,  { 1,     1,      8       },  7,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*55*/ {  PDU_PROTOCOL_ACK_8_ID         ,  { 1,     1,      8       },  8,      SERVICE_ACKNOWLEDGE,                                &pdu_protocol_response_tx_lin_buffer},
+/*56*/ {  PDU_PROTOCOL_WRITE_ID         ,  { 1,     0,      8       },  0,      SERVICE_WRITE_PARAMS,                               &pdu_protocol_request_rx_lin_buffer },
+/*13*/ {  0x00                          ,  { 0,     0,      0       },  0,      0,                                                  &dummy_lin_buffer                   },
+/*14*/ {  0x00                          ,  { 0,     0,      0       },  0,      0,                                                  &dummy_lin_buffer                   },
+/*15*/ {  0x00                          ,  { 0,     0,      0       },  0,      0,                                                  &dummy_lin_buffer                   },
+};
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  5.  EXPORTED VARIABLES AND CONSTANTS (declared in header file with 'extern')            */
+/* ---------------------------------------------------------------------------------------- */
+// LIN rx payload
+t_LIN_PC_DATA01_stc lin_pc_data01;
+t_LIN_PDU_PROTOCOL_stc lin_pdu_protocol_request;
+
+// LIN tx payload
+t_LIN_IGNITER_DATA01_stc lin_igniter_data01;
+t_LIN_PDU_PROTOCOL_stc lin_pdu_protocol_response;
+t_LIN_PDU_PROTOCOL_stc lin_pdu_protocol_publish;
+
+
+uint8_t LIN_request_tx;
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  6.  PRIVATE FUNCTION PROTOTYPES ('static')                                              */
+/* ---------------------------------------------------------------------------------------- */
+//
+
+/* ---------------------------------------------------------------------------------------- */
+/*  7.  PUBLIC FUNCTION DEFINITIONS                                                         */
+/* ---------------------------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------------------------
+ * Function		: LIN_init()
+ * Description	: Inizializzazione LIN (vedi codice per dettagli).
+ * Called by	: SYSTEM_Initialize() @ startup.
+ * Parameters	: none
+ * Return value	: void
+ * Pre-cond		:
+ * Post-cond	: Tutte le variabili del modulo hanno valori iniziali consistenti.
+ *                Hardware CAN inizializzato.
+ *                Comunicazione LIN pronta alla partenza.
+ * Side effects	: Se non fosse chiamata, comportamento indefinito del modulo.
+ * Note			: - I pin sono configurati in PIN_MANAGER_Initialize()
+ * ---------------------------------------------------------------------------------------- */
+void LIN_init(void)
+{
+    // inizializzazione periferica LIN (emulata tramite UART)
+    UART1_Initialize();
+
+    // Clear variabili
+    // buffer tx/rx
+    LIN_BUFFER_clear(ign_data01_tx_lin_buffer);
+    LIN_BUFFER_clear(pc_data01_rx_lin_buffer);
+    LIN_BUFFER_clear(pdu_protocol_request_rx_lin_buffer);
+    LIN_BUFFER_clear(pdu_protocol_response_tx_lin_buffer);
+    LIN_BUFFER_clear(dummy_lin_buffer);
+
+    // Clear payload tx/rx
+    LIN_PAYLOAD_clear(lin_igniter_data01);
+    LIN_PAYLOAD_clear(lin_pc_data01);
+    LIN_PAYLOAD_clear(lin_pdu_protocol_request);
+    LIN_PAYLOAD_clear(lin_pdu_protocol_response);
+    
+    LIN_request_tx = 0;
+}
+
+#ifdef EGICON
+/* ----------------------------------------------------------------------------------------
+ * Function		: LIN_task_tx_update()
+ * Description	: Gestisce l'aggiornamento del payload dei frame LIN attivi nello slot
+ *                di tempo specificato, in accordo alla modalita' di comunicazione attiva.
+ * Called by	: main() @ XX ms, in ogni slot di scheduler in cui e' richiesto l'aggiornamento
+ *                periodico dei dati di un frame (che poi saranno richiesti dal Master LIN).
+ * Parameters	: [IN] Send-rate dei frame da inviare: (t_CYCLE_TIME_en).
+ * Return value	: void
+ * Pre-cond		:
+ * Post-cond	:
+ * Side effects	:
+ * Note			:
+ * ---------------------------------------------------------------------------------------- */
+void LIN_task_tx_update(t_CYCLE_TIME_en cycle_time)
+{
+    switch (cycle_time)
+    {
+    case CYCLE_TIME__100ms:
+        {
+            // TEST ------------------------->
+            lin_igniter_data01.byte0 += 1;
+            lin_igniter_data01.byte1 += 10;
+            lin_igniter_data01.byte2  = 0xAA;
+            lin_igniter_data01.byte3  = 0xBB;
+            lin_igniter_data01.byte4  = 0xCC;
+            lin_igniter_data01.byte5  = 0xDD;
+            lin_igniter_data01.byte6  = 0xEE;
+            lin_igniter_data01.byte7  = 0xFF;
+            // <-------------------------- END
+
+            LIN_tx_update_payload(LIN_OBJ__IGNITER_DATA01, (uint8_t*)&lin_igniter_data01);
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+
+/* ----------------------------------------------------------------------------------------
+ * Function		: LIN_task_rx_read()
+ * Description	: Gestisce la lettura del payload dei frame LIN ricevuti, attivi
+ *                nello slot di tempo specificato.
+ * Called by	: main() @ XX ms, in ogni slot di scheduler in cui e' richiesta la ricezione
+ *                periodica di un frame (inviato dal Master LIN).
+ * Parameters	: [IN] Receive-rate dei frame da leggere: (t_CYCLE_TIME_en).
+ * Return value	: void
+ * Pre-cond		:
+ * Post-cond	:
+ * Side effects	:
+ * Note			:
+ * ---------------------------------------------------------------------------------------- */
+void LIN_task_rx_read(t_CYCLE_TIME_en cycle_time)
+{
+    switch (cycle_time)
+    {
+    case CYCLE_TIME__100ms:
+        {
+            LIN_rx_read_payload(LIN_OBJ__PC_DATA01 , (uint8_t*)&lin_pc_data01);
+
+            // update delle variabili ricavate dal contenuto raw dei frame
+            // niente da fare qui
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+#endif
+
+// effetta l'update del payload per un determinato frame LIN.
+// NOTA: la trasmissione e' asincrona e avverra' solo quando verra' inviato il corrispondente PID (Protected ID) dal Master LIN
+t_RESULT_en LIN_tx_update_payload(uint8_t msg_obj_idx, uint8_t *data, uint8_t length)
+{
+    // update del payload di trasmissione per questo ID
+    memcpy(LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->payload,
+           data,
+           LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.data_length);
+
+    LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->flag_tx_rx_data_new = 0;
+    LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->length = length;
+
+    return Ok;
+}
+
+
+// Lettura del payload di ricezione per un determinato frame LIN.
+// WARNING: passare una struttura data della stessa dimensione del payload ricevuto (tipicamente 8 bytes)
+t_RESULT_en LIN_rx_read_payload(uint8_t msg_obj_idx, uint8_t *data, uint8_t* service)
+{
+    // copia del payload di ricezione per questo ID
+    memcpy(data,
+           LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->payload,
+           LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.data_length);
+    
+    *service = LIN_OBJECT_DESCRIPTOR[msg_obj_idx].service;
+
+    LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->flag_tx_rx_data_new = 0;
+
+    return Ok;
+}
+
+
+// restituisce true se un payload di un frame attivo in trasmissione e' stato trasferito interamente
+// alla FIFO hardware della periferica UART (che gestisce la trasmissione LIN).
+bool LIN_is_transmission_completed(uint8_t msg_obj_idx)
+{
+    if (msg_obj_idx >= LIN_MESSAGE_OBJ_TOTAL_NUMBER)
+        return false;
+
+    // check se il message object LIN e' configurato
+    if (!LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.valid)
+        return false;
+
+    // chesk se il message object LIN e' configurato come trasmissione, altrimenti errore
+    if (LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.dir_0rx1tx == 0)
+        return false;
+
+    return (bool)(LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->flag_tx_rx_data_new);
+}
+
+
+// restituisce true se ho ricevuto un nuovo payload di un frame attivo in ricezione.
+bool LIN_is_reception_completed(uint8_t msg_obj_idx)
+{
+    if (msg_obj_idx >= LIN_MESSAGE_OBJ_TOTAL_NUMBER)
+        return false;
+
+    // check se il message object LIN e' configurato
+    if (!LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.valid)
+        return false;
+
+    // chesk se il message object LIN e' configurato come ricezione, altrimenti errore
+    if (LIN_OBJECT_DESCRIPTOR[msg_obj_idx].config.dir_0rx1tx == 1)
+        return false;
+
+    return (bool)(LIN_OBJECT_DESCRIPTOR[msg_obj_idx].p_buffer->flag_tx_rx_data_new);
+}
+
+
+/* ---------------------------------------------------------------------------------------- */
+/*  8.  PRIVATE FUNCTION DEFINITIONS                                                        */
+/* ---------------------------------------------------------------------------------------- */
+//
+
+/* ****************************************************************************************
+ *  EOF
+ * **************************************************************************************** */
